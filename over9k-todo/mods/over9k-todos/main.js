@@ -155,7 +155,9 @@ function readDayMonth(word) {
 function parseLine(text) {
   const due = /<!-- due: ([^>]*?) -->/.exec(text)?.[1] ?? null;
   const done = /<!-- done: ([^>]*?) -->/.exec(text)?.[1] ?? null;
-  return { text: text.replace(/\s*<!--[^>]*-->/g, "").trim(), due, doneOn: done };
+  // The branch todo.sh recorded when the item was added.
+  const branch = /<!-- branch: ([^>]*?) -->/.exec(text)?.[1] ?? null;
+  return { text: text.replace(/\s*<!--[^>]*-->/g, "").trim(), due, doneOn: done, branch };
 }
 // "<!-- skip: text -->" lines: TODO.md items hidden from the suggestions.
 function parse(raw) {
@@ -167,7 +169,7 @@ function parse(raw) {
   const opts = { log: log ? log === "on" : d.log, sync: sync ? sync === "on" : d.sync, set: { log: Boolean(log), sync: Boolean(sync) } };
   return { folder, items, skipped, opts };
 }
-const line = (i) => `- [${i.done ? "x" : " "}] ${i.text.replace(/\n/g, " ")}${i.due ? ` <!-- due: ${i.due} -->` : ""}${i.done && i.doneOn ? ` <!-- done: ${i.doneOn} -->` : ""}`;
+const line = (i) => `- [${i.done ? "x" : " "}] ${i.text.replace(/\n/g, " ")}${i.due ? ` <!-- due: ${i.due} -->` : ""}${i.branch ? ` <!-- branch: ${i.branch} -->` : ""}${i.done && i.doneOn ? ` <!-- done: ${i.doneOn} -->` : ""}`;
 const serialize = (folder, items, skipped = [], opts = {}) => `<!-- folder: ${folder} -->\n${opts.set?.log ? `<!-- log: ${opts.log ? "on" : "off"} -->\n` : ""}${opts.set?.sync ? `<!-- sync: ${opts.sync ? "on" : "off"} -->\n` : ""}${skipped.map((x) => `<!-- skip: ${x.replace(/-->/g, "")} -->\n`).join("")}${items.map(line).join("\n")}${items.length ? "\n" : ""}`;
 
 // A project's own to-do file (TODO.md and the like), read, never written: its
@@ -740,9 +742,9 @@ export default class Todos extends View {
 
   // Starts agent `a` on to-do `x` in its project's space (made if needed).
   // Several to-dos (all of one project): one agent on them all.
-  startAgent(a, x) {
+  startAgent(a, x, where = null) {
     this.startFor = null;
-    const xs = [x].flat(), folder = xs[0].folder, task = this.taskFor(xs);
+    const xs = [x].flat(), folder = where ?? xs[0].folder, task = this.taskFor(xs);
     const first = xs.length > 1 ? `${xs.length} to-dos` : xs[0].text;
     const name = first.length > 28 ? `${first.slice(0, 27)}\u2026` : first;
     const m = mOf(folder);
@@ -751,6 +753,41 @@ export default class Todos extends View {
     else run("space.new", { name: this.name(folder), folder, tab: name, argv: a.run, task, machine: m ?? "" });
     if (there && !there.active) run("space.select", { id: there.id });
     notify({ title: `${a.name} is on it`, body: xs.map((y) => y.text).join("\n"), level: "info" });
+  }
+
+  // The worktree folder a branch lives in (a space sits in it; spaces know their
+  // branch), for the branch section's agents and Send all.
+  branchFolder(branch) {
+    if (!branch) return null;
+    return spaces().find((x) => !x.machine && (x.branch ?? "") === branch)?.folder ?? null;
+  }
+
+  // The main repo a branch belongs to (its worktree's git-common-dir's parent), for
+  // the group header. Cached per branch; asked once, answered on a later render.
+  branchInfo(branch, cx) {
+    if (this.branchRepo?.[branch] !== undefined) return this.branchRepo[branch] || null;
+    (this.branchRepo ??= {})[branch] = "";
+    const folder = this.branchFolder(branch);
+    if (!folder) return null;
+    cx.spawn(async (cx) => {
+      const r = await exec("sh", ["-c", 'git -C "$1" rev-parse --git-common-dir 2>/dev/null', "sh", folder]).catch(() => null);
+      const main = (r?.stdout ?? "").trim();
+      this.branchRepo[branch] = main ? main.replace(/[\\/]\.git$/, "").replace(/\.git$/, "").split(/[\\/]/).pop() : "";
+      cx.notify();
+    });
+    return null;
+  }
+
+  // Every open to-do of one branch group to one agent — one already running in the
+  // branch's worktree, else a new one started there.
+  sendAll(g, cx) {
+    const xs = g.items.filter((x) => !x.done);
+    if (!xs.length || !this.agentChoices.length) return;
+    const folder = this.branchFolder(g.branch);
+    const running = folder ? this.runningIn(folder)[0] : null;
+    if (running) return this.sendTo(running, xs);
+    const pick = this.agentChoices.find((a) => a.key === this.newPick) ?? this.agentChoices[0];
+    if (pick) this.startAgent(pick, xs, folder ?? xs[0].folder);
   }
 
   // The picked open to-dos to agents: one already running (when they're all
@@ -835,6 +872,19 @@ export default class Todos extends View {
     const list = shown(open).sort((a, b) => (b.slug === hereSlug) - (a.slug === hereSlug) || dueKey(a).localeCompare(dueKey(b)) || a.slug.localeCompare(b.slug) || a.i - b.i);
     const done = shown(doneToday);
     this.visible = [...list, ...done.slice(0, this.doneShown ?? 5)];
+    // Branch groups (todo.sh records an item's branch when it's added). In All a group is a
+    // project+branch, so two projects never share one. Display only: the file's order and
+    // the `#n` numbers are untouched, so `todo done <n>` still works.
+    const folded = (this.branchFolded ??= new Set());
+    const gkey = (x) => (this.filter ? x.branch ?? "" : `${x.slug}|${x.branch ?? ""}`);
+    const groups = [];
+    for (const x of list) {
+      const k = gkey(x);
+      let g = groups.find((y) => y.key === k);
+      if (!g) groups.push((g = { key: k, branch: x.branch ?? null, slug: x.slug, items: [] }));
+      g.items.push(x);
+    }
+    const showGroups = groups.length > 1 || groups.some((g) => g.branch);
     const picks = this.picked();
     if (picks.length !== this.sel.size) { this.sel = new Map(picks.map((x) => [`${x.slug}:${x.i}`, x.text])); if (!picks.length) this.unpick(); }
     const now = new Date();
@@ -1037,7 +1087,23 @@ export default class Todos extends View {
         .child(div().flex_1().min_w(0).child("Let agents keep these lists"))
         .child(div().flex_none().text_size(11.5).text_color(t.accent).child("Set up"))))
       .child(v_flex().id("todo-scroll").flex_1().min_h(0).overflow_y_scrollbar().px(8).pb(8)
-        .children(list.flatMap(withStarter))
+        .children(showGroups ? groups.flatMap((g) => {
+          const repo = g.branch ? this.branchInfo(g.branch, cx) : null;
+          const wt = this.branchFolder(g.branch);
+          const acts = g.items.some((x) => !x.done) && this.agentChoices.length > 0
+            ? h_flex().gap(5).items_center()
+                .children((wt ? this.runningIn(wt).slice(0, 3) : []).map((r) => div().size(6).flex_none().rounded(3).bg(t[r.status] ?? t.idle).tooltip(this.agentName(r))))
+                .child(div().id(`sendall-${g.key}`).px(5).py(1).rounded(4).cursor_pointer().text_size(11).text_color(t.muted)
+                  .hover((x) => x.bg(t.raised).text_color(t.foreground))
+                  .tooltip(`Send every open to-do of ${g.branch ?? "this group"} to one agent`)
+                  .on_click((e, cx) => { cx.stop_propagation(); this.sendAll(g, cx); })
+                  .child("Send all"))
+            : null;
+          const isOpen = !folded.has(g.key);
+          return [section(`br-${g.key}`, g.branch ? `${g.branch}${repo ? ` · ${repo}` : ""}` : "General", g.items.length, isOpen,
+            () => { isOpen ? folded.add(g.key) : folded.delete(g.key); }, acts),
+            ...(isOpen ? g.items.flatMap(withStarter) : [])];
+        }) : list.flatMap(withStarter))
         .when(!list.length, (el) => el.child(div().px(8).py(6).text_size(12).text_color(t.dim)
           .child(this.filter ? "Nothing left here" : `Nothing to do. New ones go to ${this.here ? this.name(this.here) : "this project"}.`)))
         .when(fromFile.items.length > 0, (el) => el

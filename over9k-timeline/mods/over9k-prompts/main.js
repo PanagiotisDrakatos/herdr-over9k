@@ -14,7 +14,7 @@
 
 import { View, div, svg } from "gpui-kit";
 import { v_flex, h_flex, TextView } from "gpui-base";
-import { theme, exec, home, appHome, focused, agents, panes, readTextFile, hc } from "herdr";
+import { theme, exec, home, appHome, focused, agents, panes, readTextFile, hc, props, terminals } from "herdr";
 
 // Python 3 runs as "python3", else "python" (as on Windows): found once.
 let PY = null;
@@ -59,6 +59,11 @@ function summary(p) {
 export default class Prompts extends View {
   init(_props, cx) {
     this.handle = cx.focus_handle();
+    // An overlay opened from an agent row (the sidebar's per-agent Timeline button) pins
+    // this copy to that agent; without it, the copy follows the focused one.
+    this.pinned = props()?.terminal ?? null;
+    this.repo = null; // the followed agent's main repo: { name, branch }
+    this.repoAt = null;
     this.agent = null; // the terminal followed
     this.transcript = null;
     this.size = null; // the transcript's size when last read
@@ -71,10 +76,11 @@ export default class Prompts extends View {
   }
 
   // The agent you're in (else the last one), its transcript, re-read when it grows.
+  // A copy opened for one agent (props.terminal) keeps to it.
   follow(cx) {
     const f = focused();
-    const here = f?.agent ?? (f?.terminal && agents().some((a) => a.address === f.terminal) ? f.terminal : null);
-    if (here && here !== this.agent) { this.agent = here; this.transcript = null; this.size = null; this.open = null; this.at = 0; this.prompts = []; cx.notify(); }
+    const here = this.pinned ?? (f?.agent ?? (f?.terminal && agents().some((a) => a.address === f.terminal) ? f.terminal : null));
+    if (here && here !== this.agent) { this.agent = here; this.transcript = null; this.size = null; this.open = null; this.at = 0; this.prompts = []; this.repoAt = null; this.repo = null; cx.notify(); this.repoInfo(cx); }
     if (!this.agent || this.busy) return;
     this.busy = true;
     cx.spawn(async (cx) => {
@@ -91,10 +97,16 @@ export default class Prompts extends View {
         // Without that file: Claude Code's folder for the agent's
         // working directory (the reader takes its newest conversation).
         const a = agents().find((x) => x.address === this.agent);
-        const cwd = panes().find((p) => p.terminal === this.agent)?.cwd;
+        // The pane's folder, else a sub-agent's ancestor's (a sub-agent has no pane; its
+        // parent's folder is where its conversation runs).
+        const cwd = this.cwdOf(this.agent);
         const claude = a && (a.app === "claude-code" || a.program?.key === "claude" || /claude/i.test(a.program?.name ?? ""));
-        if (!path && claude && cwd) path = `${home()}/.claude/projects/${cwd.replace(/[^A-Za-z0-9]/g, "-")}`;
-        if (!path) { this.note = "The timeline shows Claude Code agents"; this.prompts = []; this.transcript = null; cx.notify(); return; }
+        if (!path && cwd) path = `${home()}/.claude/projects/${cwd.replace(/[^A-Za-z0-9]/g, "-")}`;
+        if (!path) {
+          const what = a ? (a.program?.name ?? a.app ?? "this agent") : "this terminal";
+          this.note = cwd ? `No ${what} conversation found in ${cwd.replace(home(), "~")}` : `No folder for ${what}: its timeline can't be found`;
+          this.prompts = []; this.transcript = null; cx.notify(); return;
+        }
         // Read only when it has grown (the reader checks its size).
         const r = await python(["-I", READER(), path, this.transcript && this.size != null ? `${this.transcript}\t${this.size}` : ""]).catch(() => null);
         let got = null;
@@ -111,6 +123,41 @@ export default class Prompts extends View {
       } finally {
         this.busy = false;
       }
+    });
+  }
+
+  // The folder an agent works in: its pane's, else its parent's (sub-agents have no
+  // pane; the core records who started them, so walk up to an ancestor that has one).
+  cwdOf(address) {
+    const cwd = panes().find((p) => p.terminal === address)?.cwd;
+    if (cwd) return cwd;
+    const bare = (x) => String(x ?? "").split("/").pop();
+    const ts = terminals();
+    let cur = ts.find((t) => t.address === address || bare(t.address) === bare(address));
+    for (let i = 0; cur?.parent && i < 8; i++) {
+      const par = String(cur.parent);
+      const cwd = panes().find((p) => p.terminal === par || bare(p.terminal) === bare(par))?.cwd;
+      if (cwd) return cwd;
+      cur = ts.find((t) => t.address === par || bare(t.address) === bare(par));
+    }
+    return null;
+  }
+
+  // The main repo's name and branch for the header: the worktree's main checkout
+  // and its own branch ("acme/feature-x"). Once per followed agent.
+  repoInfo(cx) {
+    const at = this.agent;
+    if (!at || this.repoAt === at) return;
+    this.repoAt = at;
+    const cwd = this.cwdOf(at);
+    if (!cwd) { this.repo = null; return; }
+    cx.spawn(async (cx) => {
+      const r = await exec("sh", ["-c", 'git -C "$1" rev-parse --git-common-dir 2>/dev/null; git -C "$1" branch --show-current 2>/dev/null; git -C "$1" rev-parse --is-inside-work-tree 2>/dev/null', "sh", cwd]).catch(() => null);
+      const [common, branch, inside] = (r?.stdout ?? "").split("\n");
+      if (at !== this.agent) return;
+      const main = common ? common.replace(/[\\/]\.git$/, "").replace(/\.git$/, "").split(/[\\/]/).pop() : null;
+      this.repo = inside === "true" ? { name: main, branch: branch || null } : null;
+      cx.notify();
     });
   }
 
@@ -136,6 +183,14 @@ export default class Prompts extends View {
     const t = theme();
     const list = this.prompts;
     const working = agents().find((x) => x.address === this.agent)?.status === "working";
+    // Click-to-copy and send actions on a card read in full; the label flashes for a moment.
+    const flash = (key, cx) => { this.copied = key; cx.notify(); cx.spawn(async (cx) => { await cx.sleep(1500); if (this.copied === key) { this.copied = null; cx.notify(); } }); };
+    const cardBtn = (key, i, label, done, has, tip, fn) => !has ? null : h_flex().id(`${key}-${i}`).h(22).px(6).flex_none().items_center().rounded(5).cursor_pointer()
+      .text_size(11).text_color(this.copied === `${key}-${i}` ? t.accent : t.muted)
+      .hover((x) => x.bg(t.hover).text_color(t.foreground))
+      .tooltip(tip)
+      .on_click((_e, cx) => { fn(cx); flash(`${key}-${i}`, cx); })
+      .child(this.copied === `${key}-${i}` ? done : label);
     const item = (p, i) => {
       const on = this.open === i, picked = this.at === i, live = i === 0 && working;
       const last = i === list.length - 1;
@@ -174,6 +229,9 @@ export default class Prompts extends View {
           // Read in full: the reply as Markdown, then what it changed.
           .when(on, (el) => el.child(v_flex().mt(4).pt(6).gap(6).border_t_1().border_color(t.border)
             .child(p.reply ? TextView.markdown(`reply-${list.length - i}`, p.reply).selectable(true).text_size(12.5) : div().text_size(12).text_color(t.dim).child(live ? "Working…" : "(no reply text)"))
+            .children([cardBtn("copy-p", list.length - i, "Copy prompt", "Copied", Boolean(plain(p.text)), "Click to copy the prompt", (cx) => cx.write_to_clipboard(p.text)),
+              cardBtn("copy-r", list.length - i, "Copy reply", "Copied", Boolean(plain(p.reply)), "Click to copy the reply", (cx) => cx.write_to_clipboard(p.reply)),
+              cardBtn("send", list.length - i, "Send to agent", "Sent", Boolean(this.agent), "Sends this prompt to the agent, as if you typed it", (cx) => { hc(["send", this.agent, p.text]).catch(() => null); })].filter(Boolean))
             .when(p.edits.length > 0, (el) => el.child(v_flex().gap(1).text_size(11).text_color(t.dim)
               .child(div().child("Changed"))
               .children(p.edits.map((x) => div().truncate().text_color(t.muted).child(x.replace(home(), "~")))))))));
@@ -194,7 +252,8 @@ export default class Prompts extends View {
         .child(div().flex_none().font_semibold().child("Timeline"))
         .when(list.length > 0, (el) => el.child(div().flex_none().px(5).py(1).rounded(4).border_1().border_color(t.border).text_size(10).text_color(t.muted)
           .child(`${list.length} prompt${list.length > 1 ? "s" : ""}`)))
-        .child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(this.name()))
+        .child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim)
+          .child(this.name() + (this.repo ? ` · ${this.repo.name ?? "?"}${this.repo.branch ? `/${this.repo.branch}` : ""}` : "")))
         // As the CLI words them: ↓ what it wrote this session, and the context it holds now.
         .when(list.length > 0, (el) => el.child(div().flex_none().text_size(12).text_color(t.dim)
           .child([`↓ ${count(list.reduce((n, p, i) => n + (i === 0 && working && this.live ? this.live.tokens : p.tokens || 0), 0))}`,

@@ -110,8 +110,13 @@ case "$cmd" in
     due=""; if [ "$1" = "--due" ]; then due=$2; shift 2; fi
     text=$(printf '%s' "$*" | tr '\n' ' ' | sed 's/  *$//')
     [ -n "$text" ] || { echo "usage: todo add <text>" >&2; exit 2; }
+    # The branch this runs on, when it's this project (a worktree resolves to the main
+    # checkout's list; its own branch groups the item in the panel).
+    branch=""
+    common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+    case "$common" in "$folder/.git") branch=$(git branch --show-current 2>/dev/null || true) ;; esac
     [ -f "$file" ] || printf '<!-- folder: %s -->\n' "$folder" > "$file"
-    printf -- '- [ ] %s%s\n' "$text" "${due:+ <!-- due: $due -->}" >> "$file"
+    printf -- '- [ ] %s%s%s\n' "$text" "${due:+ <!-- due: $due -->}" "${branch:+ <!-- branch: $branch -->}" >> "$file"
     md add "$text"
     echo "Added to $(printf %s "$folder" | sed "s#^$HOME#~#"): $text" ;;
   # Also crossed out (or back in) in the project's own TODO.md, if it lists it.
