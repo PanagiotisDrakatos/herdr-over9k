@@ -921,10 +921,9 @@ export default class Spaces extends View {
   // an agent is always that agent's, not the focused one's.
   timelineChip(a, t) {
     return h_flex().id(`tl-${a.address}`).size(18).flex_none().items_center().justify_center().rounded(4).cursor_pointer()
-      .text_color(this.hoverTl === a.address ? t.accent : t.muted)
-      .hover((s) => s.bg(t.hover))
+      .text_color(t.muted)
+      .hover((s) => s.bg(t.hover).text_color(t.accent))
       .on_mouse_down("left", (_e, cx) => cx.stop_propagation())
-      .on_hover((on, cx) => { this.hoverTl = on ? a.address : null; cx.notify(); })
       .on_click((_e, cx) => { cx.stop_propagation(); openOverlay({ mod: "over9k-prompts", kind: "popup", width: 430, height: 540, props: { terminal: a.address } }); })
       .tooltip(`${a.program?.name ?? "Agent"}: timeline (click)`)
       .child(svg("mods/over9k-prompts/timeline.svg").size(12));

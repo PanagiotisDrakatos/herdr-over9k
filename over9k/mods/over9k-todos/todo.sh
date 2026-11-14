@@ -110,8 +110,17 @@ case "$cmd" in
     due=""; if [ "$1" = "--due" ]; then due=$2; shift 2; fi
     text=$(printf '%s' "$*" | tr '\n' ' ' | sed 's/  *$//')
     [ -n "$text" ] || { echo "usage: todo add <text>" >&2; exit 2; }
+    # The branch (and its worktree folder, when this is one) this runs on, when it's this
+    # project: a worktree resolves to the main checkout's list, so without these the list
+    # mixes branches; the panel groups by them and "Send all" starts in the worktree.
+    branch=""; wt=""
+    common=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+    case "$common" in "$folder/.git")
+      branch=$(git branch --show-current 2>/dev/null || true)
+      wt=$(git rev-parse --show-toplevel 2>/dev/null || true)
+      [ "$wt" != "$folder" ] || wt="" ;; esac
     [ -f "$file" ] || printf '<!-- folder: %s -->\n' "$folder" > "$file"
-    printf -- '- [ ] %s%s\n' "$text" "${due:+ <!-- due: $due -->}" >> "$file"
+    printf -- '- [ ] %s%s%s%s\n' "$text" "${due:+ <!-- due: $due -->}" "${branch:+ <!-- branch: $branch -->}" "${wt:+ <!-- wt: $wt -->}" >> "$file"
     md add "$text"
     echo "Added to $(printf %s "$folder" | sed "s#^$HOME#~#"): $text" ;;
   # Also crossed out (or back in) in the project's own TODO.md, if it lists it.

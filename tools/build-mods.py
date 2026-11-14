@@ -16,10 +16,11 @@ LAYOUT_KEYS = json.load(open(os.path.join(ROOT, "over9k", "keys.json")))
 LAYOUT_KEYS_MAC = json.load(open(os.path.join(ROOT, "over9k", "keys.macos.json")))
 
 SHARES = {
-    # The sidebar, with every overlay it opens (menus, dialogs, Help & Options).
+    # The sidebar, with every overlay it opens (menus, dialogs, Help & Options, Timelines).
     "over9k-sidebar": {
         "mods": ["over9k", "over9k-menu", "over9k-new-menu", "over9k-server-stop", "over9k-rename",
-                 "over9k-close", "over9k-handoff", "over9k-panel", "over9k-switcher", "over9k-options"],
+                 "over9k-close", "over9k-handoff", "over9k-panel", "over9k-switcher", "over9k-options",
+                 "over9k-prompts"],
         "place": {"over9k": {"place": "left", "size": 268}},
         "keys": LAYOUT_KEYS,
         "keys_macos": LAYOUT_KEYS_MAC,
