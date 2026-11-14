@@ -87,7 +87,7 @@ const toFile = (folder, ...args) => (SYNCED.has(folder) ? cross(folder, ...args)
 const SYNCED = new Set(); // folders with Sync on
 const slugOf = (folder) => folder.replace(/\/+$/, "").replace(/[^A-Za-z0-9]+/g, "-").replace(/^-|-$/g, "");
 // The list format and its grouping live in todo-core.js (pure, headlessly tested).
-import { ITEM, parseLine, line, serialize, groupsOf, visibleOrder } from "./todo-core.js";
+import { ITEM, parseLine, line, serialize, groupsOf, visibleOrder, runningInAgents } from "./todo-core.js";
 // A click that picks rather than acts, as in the over9k sidebar.
 // Log and Sync for a project that never set them: Options › To-do.
 const defOpts = () => { const o = shared("sidebar.options") ?? {}; return { log: o.todoLog !== false, sync: o.todoSync === true }; };
@@ -706,15 +706,7 @@ export default class Todos extends View {
   // folder first so a checkout never absorbs a nested worktree's agent; the one
   // you were last in first.
   runningIn(folder) {
-    if (!folder) return [];
-    const ps = panes();
-    const match = (a) => {
-      const c = (ps.find((p) => p.terminal === a.address)?.cwd ?? "").replace(/\/+$/, "");
-      return c === folder || c.startsWith(folder + "/");
-    };
-    const agents = agents().filter(match);
-    const exact = agents.filter((a) => (ps.find((p) => p.terminal === a.address)?.cwd ?? "").replace(/\/+$/, "") === folder);
-    return (exact.length ? exact : agents).sort((a, b) => (b.address === this.lastAgent) - (a.address === this.lastAgent));
+    return runningInAgents(folder, agents(), panes(), this.lastAgent);
   }
 
   // What the sidebar calls an agent: a name given to its tab, else its
@@ -758,8 +750,9 @@ export default class Todos extends View {
     if (!branch) return null;
     const s = spaces().find((x) => !x.machine && (x.branch ?? "") === branch);
     if (!s) return null;
+    const sf = s.folder ?? ""; // a space can have no folder (a bare machine)
     const folder = this.lists[slug]?.folder;
-    return !folder || s.folder === folder || s.folder.startsWith(folder + "/") ? s.folder : null;
+    return !folder || sf === folder || sf.startsWith(folder + "/") ? sf : null;
   }
 
   // The main repo a branch belongs to (its worktree's git-common-dir's parent), for
@@ -900,6 +893,7 @@ export default class Todos extends View {
     // What the screen shows and shift+click ranges follow: open groups in screen
     // order, folded ones out, then the done ones.
     this.visible = visibleOrder(showGroups ? groups : [{ key: "ungrouped", items: list }], folded, done, this.doneShown ?? 5, this.doneFolded ?? false);
+    this.prunePicks(); // against the fresh visible set, not the previous render's
     const picks = this.picked();
     if (picks.length !== this.sel.size) { this.sel = new Map(picks.map((x) => [`${x.slug}:${x.i}`, x.text])); if (!picks.length) this.unpick(); }
     const now = new Date();

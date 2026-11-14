@@ -120,9 +120,10 @@ case "$cmd" in
       wt=$(git rev-parse --show-toplevel 2>/dev/null || true)
       [ "$wt" != "$folder" ] || wt=""
       # Neither may hold ">" or "-->": both occur in git refs and paths, and the
-      # panel's <!-- branch: ... --> markers would parse short.
-      case "$branch" in *'>'*|*'-->'*) branch="" ;; esac
-      case "$wt" in *'>'*|*'-->'*) wt="" ;; esac ;; esac
+      # panel's <!-- branch: ... --> markers would parse short. The two travel as
+      # a pair — a wt alone would still steer "Send all" — so one dirty value
+      # drops both.
+      case "$branch$wt" in *'>'*|*'-->'*) branch=""; wt="" ;; esac ;; esac
     [ -f "$file" ] || printf '<!-- folder: %s -->\n' "$folder" > "$file"
     printf -- '- [ ] %s%s%s%s\n' "$text" "${due:+ <!-- due: $due -->}" "${branch:+ <!-- branch: $branch -->}" "${wt:+ <!-- wt: $wt -->}" >> "$file"
     md add "$text"

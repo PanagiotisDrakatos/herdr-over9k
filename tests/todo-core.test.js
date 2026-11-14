@@ -2,7 +2,7 @@
 // markers, grouping, screen order. Kept outside the mod folders on purpose.
 // Run from the repo root: bun test tests/todo-core.test.js  (or: node --test)
 import { describe, expect, test } from "bun:test";
-import { ITEM, parseLine, line, serialize, groupsOf, visibleOrder } from "../over9k/mods/over9k-todos/todo-core.js";
+import { ITEM, parseLine, line, serialize, groupsOf, visibleOrder, runningInAgents } from "../over9k/mods/over9k-todos/todo-core.js";
 
 const item = (over = {}) => ({ done: false, text: "x", due: null, doneOn: null, branch: null, wt: null, ...over });
 
@@ -112,5 +112,34 @@ describe("main-checkout items", () => {
     const g = groupsOf([{ ...item({ branch: "main" }), slug: "a", i: 0 }], null);
     expect(g).toHaveLength(1);
     expect(g[0].branch).toBe("main"); // never null: the header and Send all need it
+  });
+});
+
+describe("runningInAgents", () => {
+  const pane = (terminal, cwd) => ({ terminal, cwd });
+  const agent = (address) => ({ address });
+
+  test("an exact-folder agent wins over a nested worktree's, so a checkout never absorbs it", () => {
+    const panes = [pane("t1", "/repo"), pane("t2", "/repo/wt-nested")];
+    const agents = [agent("t2"), agent("t1")];
+    expect(runningInAgents("/repo", agents, panes).map((a) => a.address)).toEqual(["t1"]);
+  });
+
+  test("no exact agent: a pane cwd under the folder still counts (a repo subdir)", () => {
+    const panes = [pane("t1", "/repo/sub"), pane("t2", "/other")];
+    const agents = [agent("t1"), agent("t2")];
+    expect(runningInAgents("/repo", agents, panes).map((a) => a.address)).toEqual(["t1"]);
+  });
+
+  test("no folder, or no pane cwd inside it: nobody runs there", () => {
+    const panes = [pane("t1", "/other")];
+    expect(runningInAgents("", [agent("t1")], panes)).toEqual([]);
+    expect(runningInAgents("/repo", [agent("t1")], panes)).toEqual([]);
+  });
+
+  test("the agent you were last in comes first", () => {
+    const panes = [pane("t1", "/repo"), pane("t2", "/repo")];
+    const agents = [agent("t1"), agent("t2")];
+    expect(runningInAgents("/repo", agents, panes, "t2").map((a) => a.address)).toEqual(["t2", "t1"]);
   });
 });

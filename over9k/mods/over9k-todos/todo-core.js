@@ -43,3 +43,18 @@ export const visibleOrder = (groups, folded, done, doneShown = 5, doneFolded = f
   ...groups.filter((g) => !folded.has(g.key)).flatMap((g) => g.items),
   ...(doneFolded ? [] : done.slice(0, doneShown)),
 ];
+
+// Agents already running in `folder` (an agent's pane cwd is the folder or under
+// it), the exact folder first so a checkout never absorbs a nested worktree's
+// agent; the one you were last in first. Pure (agents/panes are passed in) so
+// bun test can drive it; main.js's runningIn delegates here.
+export function runningInAgents(folder, agents, panes, lastAgent = null) {
+  if (!folder) return [];
+  const cwdOf = (a) => (panes.find((p) => p.terminal === a.address)?.cwd ?? "").replace(/\/+$/, "");
+  const inFolder = agents.filter((a) => {
+    const c = cwdOf(a);
+    return c === folder || c.startsWith(folder + "/");
+  });
+  const exact = inFolder.filter((a) => cwdOf(a) === folder);
+  return (exact.length ? exact : inFolder).sort((a, b) => (b.address === lastAgent) - (a.address === lastAgent));
+}
