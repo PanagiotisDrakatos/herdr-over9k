@@ -195,7 +195,12 @@ export default class Prompts extends View {
     const working = agents().find((x) => x.address === this.agent)?.status === "working";
     // Click-to-copy and send actions on a card read in full. stop_propagation keeps the
     // card's own click (open/close) from firing; the label flashes only on success.
-    const flash = (key, ok, cx) => { this.copied = ok === false ? null : key; if (ok === false) this.failed = key; cx.notify(); cx.spawn(async (cx) => { await cx.sleep(1500); if (this.copied === key || this.failed === key) { this.copied = this.failed = null; cx.notify(); } }); };
+    const flash = (key, ok, cx) => {
+      this.copied = null; this.failed = null; // a retry after "Failed" must not keep showing it
+      if (ok !== false) this.copied = key; else this.failed = key;
+      cx.notify();
+      cx.spawn(async (cx) => { await cx.sleep(1500); if (this.copied === key || this.failed === key) { this.copied = this.failed = null; cx.notify(); } });
+    };
     const cardBtn = (key, i, label, done, fail, has, tip, fn) => !has ? null : h_flex().id(`${key}-${i}`).h(22).px(6).flex_none().items_center().rounded(5).cursor_pointer()
       .text_size(11).text_color(this.failed === `${key}-${i}` ? t.ansi1 : this.copied === `${key}-${i}` ? t.accent : t.muted)
       .hover((x) => x.bg(t.hover).text_color(t.foreground))
@@ -264,7 +269,8 @@ export default class Prompts extends View {
         .child(div().flex_none().font_semibold().child("Timeline"))
         .when(list.length > 0, (el) => el.child(div().flex_none().px(5).py(1).rounded(4).border_1().border_color(t.border).text_size(10).text_color(t.muted)
           .child(`${list.length} prompt${list.length > 1 ? "s" : ""}`)))
-        .child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim).child(this.name()))
+        .child(div().flex_1().min_w(0).truncate().text_right().text_size(12).text_color(t.dim)
+          .child(this.name() + (this.repo ? ` · ${this.repo.name ?? "?"}${this.repo.branch ? `/${this.repo.branch}` : ""}` : "")))
         // As the CLI words them: ↓ what it wrote this session, and the context it holds now.
         .when(list.length > 0, (el) => el.child(div().flex_none().text_size(12).text_color(t.dim)
           .child([`↓ ${count(list.reduce((n, p, i) => n + (i === 0 && working && this.live ? this.live.tokens : p.tokens || 0), 0))}`,

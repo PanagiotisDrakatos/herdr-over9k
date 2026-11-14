@@ -8,7 +8,7 @@
 // `wt` is what "Send all" and the repo lookup use, so two projects on the same branch
 // never reach each other's agents.
 
-export const ITEM = /^- \[( |x|X)\] (.*)$/s;
+export const ITEM = /^- \[( |x)\] (.*)$/;
 
 export function parseLine(text) {
   const due = /<!-- due: ([^>]*?) -->/.exec(text)?.[1] ?? null;
@@ -38,8 +38,8 @@ export function groupsOf(list, filter) {
 }
 
 // What the screen shows and shift+click ranges follow: open groups in screen order
-// (folded ones drop out), then the done ones. Built after the groups on purpose.
-export const visibleOrder = (groups, folded, done, doneShown = 5) => [
+// (folded ones drop out), then the done ones (not while their section is folded).
+export const visibleOrder = (groups, folded, done, doneShown = 5, doneFolded = false) => [
   ...groups.filter((g) => !folded.has(g.key)).flatMap((g) => g.items),
-  ...done.slice(0, doneShown),
+  ...(doneFolded ? [] : done.slice(0, doneShown)),
 ];

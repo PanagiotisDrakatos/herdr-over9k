@@ -87,4 +87,30 @@ describe("visibleOrder", () => {
     expect(v.map((y) => y.i)).toEqual([0, 3]); // folded group's b,c are not selectable
     expect(visibleOrder(groups, new Set(), done, 5).map((y) => y.i)).toEqual([0, 1, 2, 3]);
   });
+
+  test("keeps the screen order even when it is not the item index order", () => {
+    const a = { ...item(), slug: "s", i: 5, key: "s|", branch: null };
+    const b = { ...item(), slug: "s", i: 2, key: "s|f", branch: "f" };
+    expect(visibleOrder([{ key: "s|", branch: null, slug: "s", items: [a] }, { key: "s|f", branch: "f", slug: "s", items: [b] }], new Set(), [], 5).map((y) => y.i)).toEqual([5, 2]);
+  });
+
+  test("honours doneShown", () => {
+    const done = [1, 2, 3].map((i) => ({ ...item({ done: true }), slug: "s", i }));
+    expect(visibleOrder([], new Set(), done, 1).map((y) => y.i)).toEqual([1]);
+  });
+
+  test("drops the done rows entirely while their section is folded", () => {
+    const done = [{ ...item({ done: true }), slug: "s", i: 9 }];
+    expect(visibleOrder([], new Set(), done, 5, true).map((y) => y.i)).toEqual([]);
+  });
+});
+
+describe("main-checkout items", () => {
+  test("a branch marker without wt parses, round-trips, and groups by branch", () => {
+    const p = parseLine(ITEM.exec(line(item({ text: "on main", branch: "main" })))[2]);
+    expect(p).toMatchObject({ text: "on main", branch: "main", wt: null });
+    const g = groupsOf([{ ...item({ branch: "main" }), slug: "a", i: 0 }], null);
+    expect(g).toHaveLength(1);
+    expect(g[0].branch).toBe("main"); // never null: the header and Send all need it
+  });
 });

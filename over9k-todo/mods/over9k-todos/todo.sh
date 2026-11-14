@@ -118,7 +118,11 @@ case "$cmd" in
     case "$common" in "$folder/.git")
       branch=$(git branch --show-current 2>/dev/null || true)
       wt=$(git rev-parse --show-toplevel 2>/dev/null || true)
-      [ "$wt" != "$folder" ] || wt="" ;; esac
+      [ "$wt" != "$folder" ] || wt=""
+      # Neither may hold ">" or "-->": both occur in git refs and paths, and the
+      # panel's <!-- branch: ... --> markers would parse short.
+      case "$branch" in *'>'*|*'-->'*) branch="" ;; esac
+      case "$wt" in *'>'*|*'-->'*) wt="" ;; esac ;; esac
     [ -f "$file" ] || printf '<!-- folder: %s -->\n' "$folder" > "$file"
     printf -- '- [ ] %s%s%s%s\n' "$text" "${due:+ <!-- due: $due -->}" "${branch:+ <!-- branch: $branch -->}" "${wt:+ <!-- wt: $wt -->}" >> "$file"
     md add "$text"
